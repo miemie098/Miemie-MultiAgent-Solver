@@ -1,0 +1,252 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Infra 多智能体求解台</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap');
+        body { font-family: 'Plus Jakarta Sans', 'PingFang SC', sans-serif; background-color: #f8fafc; }
+
+        /* 极其醒目的节点动画 CSS */
+        .node-default { background: #ffffff; color: #64748b; border-color: #e2e8f0; }
+        .node-active-search { background: #3b82f6; color: white; border-color: #2563eb; transform: scale(1.1); box-shadow: 0 10px 15px -3px rgba(59, 130, 246, 0.4); z-index: 10; }
+        .node-active-analyzer { background: #8b5cf6; color: white; border-color: #7c3aed; transform: scale(1.1); box-shadow: 0 10px 15px -3px rgba(139, 92, 246, 0.4); z-index: 10; }
+        .node-active-critic { background: #f59e0b; color: white; border-color: #d97706; transform: scale(1.1); box-shadow: 0 10px 15px -3px rgba(245, 158, 11, 0.4); z-index: 10; }
+        .node-active-compactor { background: #14b8a6; color: white; border-color: #0d9488; transform: scale(1.1); box-shadow: 0 10px 15px -3px rgba(20, 184, 166, 0.4); z-index: 10; }
+        .node-active-report { background: #10b981; color: white; border-color: #059669; transform: scale(1.1); box-shadow: 0 10px 15px -3px rgba(16, 185, 129, 0.4); z-index: 10; }
+        .node-active-search i, .node-active-analyzer i, .node-active-critic i, .node-active-compactor i, .node-active-report i { color: white !important; }
+    </style>
+</head>
+<body class="text-slate-900 selection:bg-indigo-500 selection:text-white">
+
+    <nav class="bg-white border-b border-slate-200/80 sticky top-0 z-50 px-8 py-4 flex justify-between items-center backdrop-blur-md">
+        <div class="flex items-center space-x-3">
+            <div class="w-9 h-9 rounded-xl bg-indigo-600 flex items-center justify-center shadow-md">
+                <i class="fas fa-layer-group text-white text-sm"></i>
+            </div>
+            <div>
+                <span class="text-sm font-bold text-slate-900 block tracking-tight">Miemie-Solver</span>
+                <span class="text-[10px] text-slate-400 font-medium tracking-wide uppercase">AI Infra DAG Agent Platform</span>
+            </div>
+        </div>
+        <span class="bg-emerald-50 text-emerald-600 text-xs px-2.5 py-1 rounded-md border border-emerald-200/60 font-medium">集群网关已连通</span>
+    </nav>
+
+    <main class="max-w-7xl mx-auto px-6 py-8 grid grid-cols-1 lg:grid-cols-12 gap-8">
+        <section class="lg:col-span-5 bg-white p-6 rounded-2xl border border-slate-200/60 shadow-sm flex flex-col space-y-6">
+            <div class="border-b border-slate-100 pb-4">
+                <h2 class="text-base font-bold text-slate-900"><i class="fas fa-sliders-h text-indigo-600 mr-2"></i>图求解器配置</h2>
+            </div>
+            <div class="space-y-4">
+                <div>
+                    <label class="block text-xs font-semibold text-slate-500 mb-2">求解推演 Query</label>
+                    <textarea id="queryField" rows="3" class="w-full text-sm p-3.5 border rounded-xl bg-slate-50/50">分析高并发长文本下 MLA 机制与 PagedAttention 的融合架构缺陷，并给出优化方案。</textarea>
+                </div>
+                <div>
+                    <label class="block text-xs font-semibold text-slate-500 mb-2">长窗口硬熔断阈值</label>
+                    <input id="maxCorrField" type="number" value="3" class="w-full text-sm p-3 border rounded-xl bg-slate-50/50" />
+                </div>
+            </div>
+            <button onclick="executeAgentWorkflow()" id="triggerBtn" class="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-semibold py-3.5 rounded-xl shadow-lg transition-all">
+                <i class="fas fa-bolt text-xs mr-2"></i>启动有向循环图求解网络
+            </button>
+        </section>
+
+        <section class="lg:col-span-7 flex flex-col space-y-6">
+            <div class="bg-white p-6 rounded-2xl border border-slate-200/60 shadow-sm">
+                <div class="flex justify-between items-center mb-5">
+                    <h2 class="text-sm font-bold"><i id="spinnerIcon" class="fas fa-circle-notch fa-spin text-indigo-600 hidden mr-2"></i><i id="statusIcon" class="fas fa-project-diagram text-indigo-600 mr-2"></i>SOP 状态通道隔离流转链路</h2>
+                    <span id="loopBadge" class="hidden text-[11px] bg-amber-50 text-amber-600 font-semibold px-2.5 py-1 rounded-md border border-amber-200"></span>
+                </div>
+
+                <div class="grid grid-cols-5 gap-2 text-center text-xs font-semibold mb-5 bg-slate-50 p-3 rounded-xl border border-slate-100">
+                    <div id="node-search" class="node-default py-2 transition-all duration-300 rounded-lg border flex flex-col items-center justify-center space-y-1">
+                        <i class="fas fa-search text-blue-500"></i><span class="tracking-wide">Search</span>
+                    </div>
+                    <div id="node-analyzer" class="node-default py-2 transition-all duration-300 rounded-lg border flex flex-col items-center justify-center space-y-1">
+                        <i class="fas fa-brain text-purple-500"></i><span class="tracking-wide">Analyzer</span>
+                    </div>
+                    <div id="node-critic" class="node-default py-2 transition-all duration-300 rounded-lg border flex flex-col items-center justify-center space-y-1">
+                        <i class="fas fa-balance-scale text-amber-500"></i><span class="tracking-wide">Critic</span>
+                    </div>
+                    <div id="node-compactor" class="node-default py-2 transition-all duration-300 rounded-lg border flex flex-col items-center justify-center space-y-1">
+                        <i class="fas fa-compress-arrows-alt text-teal-500"></i><span class="tracking-wide">Compactor</span>
+                    </div>
+                    <div id="node-report" class="node-default py-2 transition-all duration-300 rounded-lg border flex flex-col items-center justify-center space-y-1">
+                        <i class="fas fa-file-signature text-emerald-500"></i><span class="tracking-wide">Report</span>
+                    </div>
+                </div>
+
+                <div id="consoleWrapper" class="space-y-3 max-h-56 overflow-y-auto pr-1 scroll-smooth">
+                    <p class="text-xs text-slate-400 text-center py-6">等待触发节点下发机制...</p>
+                </div>
+            </div>
+
+            <div class="bg-white p-6 rounded-2xl border border-slate-200/60 shadow-sm flex-1 flex flex-col">
+                <h2 class="text-sm font-bold text-slate-900 mb-4"><i class="far fa-file-alt text-indigo-600 mr-2"></i>最终技术审计收敛报告</h2>
+                <div id="reportContainer" class="border border-slate-100 rounded-xl p-5 bg-slate-50/40 text-sm leading-relaxed overflow-y-auto max-h-80 text-slate-600 flex-1">
+                    等待多智能体集群推理输出核心报告...
+                </div>
+            </div>
+        </section>
+    </main>
+
+    <script>
+        function resetAllNodes() {
+            ['node-search', 'node-analyzer', 'node-critic', 'node-compactor', 'node-report'].forEach(id => {
+                document.getElementById(id).className = 'node-default py-2 transition-all duration-300 rounded-lg border flex flex-col items-center justify-center space-y-1';
+            });
+            document.querySelector('#node-search i').className = 'fas fa-search text-blue-500';
+            document.querySelector('#node-analyzer i').className = 'fas fa-brain text-purple-500';
+            document.querySelector('#node-critic i').className = 'fas fa-balance-scale text-amber-500';
+            document.querySelector('#node-compactor i').className = 'fas fa-compress-arrows-alt text-teal-500';
+            document.querySelector('#node-report i').className = 'fas fa-file-signature text-emerald-500';
+        }
+
+        async function executeAgentWorkflow() {
+            const triggerBtn = document.getElementById('triggerBtn');
+            const consoleWrapper = document.getElementById('consoleWrapper');
+            const reportContainer = document.getElementById('reportContainer');
+
+            triggerBtn.disabled = true;
+            triggerBtn.classList.add('opacity-50');
+            document.getElementById('spinnerIcon').classList.remove('hidden');
+            document.getElementById('statusIcon').classList.add('hidden');
+            document.getElementById('loopBadge').classList.add('hidden');
+
+            consoleWrapper.innerHTML = '';
+            reportContainer.innerHTML = '<div class="text-slate-400 animate-pulse"><i class="fas fa-cog fa-spin mr-2"></i>正在进行有向循环图计算...</div>';
+            resetAllNodes();
+
+            const userQuery = document.getElementById('queryField').value.trim();
+            const maxCorr = parseInt(document.getElementById('maxCorrField').value) || 3;
+
+            if (!userQuery) {
+                reportContainer.innerHTML = '<span class="text-amber-500 font-bold">请输入一个分析问题。</span>';
+                triggerBtn.disabled = false;
+                triggerBtn.classList.remove('opacity-50');
+                document.getElementById('spinnerIcon').classList.add('hidden');
+                document.getElementById('statusIcon').classList.remove('hidden');
+                return;
+            }
+
+            let correctionCount = 0;
+            let finalReport = '';
+            let eventQueue = [];
+
+            try {
+                const res = await fetch('/api/solve/stream', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ query: userQuery, max_corrections: maxCorr })
+                });
+
+                if (!res.ok) {
+                    throw new Error(`Server returned ${res.status}`);
+                }
+
+                // Phase 1: Collect all events
+                const text = await res.text();
+                const lines = text.split('\n');
+                for (const line of lines) {
+                    if (!line.startsWith('data: ')) continue;
+                    try {
+                        const event = JSON.parse(line.slice(6));
+                        eventQueue.push(event);
+                    } catch (e) {}
+                }
+
+                // Phase 2: Replay events with animation delay
+                for (const event of eventQueue) {
+                    if (event.type === 'node_complete') {
+                        resetAllNodes();
+                        highlightNode(event.node);
+                        appendLog(event.agent, event.content);
+                        await new Promise(r => setTimeout(r, 500));
+                    } else if (event.type === 'done') {
+                        finalReport = event.report;
+                        correctionCount = event.correction_count || 0;
+                    } else if (event.type === 'error') {
+                        reportContainer.innerHTML = `<span class="text-rose-500 font-bold">${event.message}</span>`;
+                    }
+                }
+
+                // Phase 3: Render final report
+                if (finalReport) {
+                    resetAllNodes();
+                    document.getElementById('node-report').className = 'node-active-report py-2 transition-all duration-300 rounded-lg border flex flex-col items-center justify-center space-y-1';
+                    document.getElementById('loopBadge').textContent = `循环拦截: ${correctionCount}次`;
+                    document.getElementById('loopBadge').classList.remove('hidden');
+                    reportContainer.innerHTML = renderMarkdown(finalReport);
+                }
+
+            } catch (e) {
+                reportContainer.innerHTML = `<span class="text-rose-500 font-bold">工作流执行失败：${e.message || '未知错误'}</span>`;
+                console.error(e);
+            } finally {
+                triggerBtn.disabled = false;
+                triggerBtn.classList.remove('opacity-50');
+                document.getElementById('spinnerIcon').classList.add('hidden');
+                document.getElementById('statusIcon').classList.remove('hidden');
+            }
+
+            function highlightNode(nodeName) {
+                const nodeMap = {
+                    'search': 'node-search',
+                    'analyzer': 'node-analyzer',
+                    'critic': 'node-critic',
+                    'compactor': 'node-compactor',
+                    'summary': 'node-report',
+                };
+                const elId = nodeMap[nodeName];
+                if (elId) {
+                    const activeClass = elId === 'node-search' ? 'node-active-search'
+                        : elId === 'node-analyzer' ? 'node-active-analyzer'
+                        : elId === 'node-critic' ? 'node-active-critic'
+                        : elId === 'node-compactor' ? 'node-active-compactor'
+                        : 'node-active-report';
+                    document.getElementById(elId).className = activeClass + ' py-2 transition-all duration-300 rounded-lg border flex flex-col items-center justify-center space-y-1';
+                }
+            }
+
+            function appendLog(agent, content) {
+                const labelStyles = {
+                    'Search Agent': 'text-blue-600 bg-blue-50 border-blue-100',
+                    'Analyzer Agent': 'text-purple-600 bg-purple-50 border-purple-100',
+                    'Critic Agent': 'text-amber-600 bg-amber-50 border-amber-100',
+                    'Compactor Agent': 'text-teal-600 bg-teal-50 border-teal-100',
+                    'Debate Panel': 'text-pink-600 bg-pink-50 border-pink-100',
+                    'Summary Agent': 'text-emerald-600 bg-emerald-50 border-emerald-100',
+                };
+                const labelStyle = labelStyles[agent] || 'text-slate-600 bg-slate-50 border-slate-200';
+
+                const item = document.createElement('div');
+                item.className = `p-3 rounded-xl border ${labelStyle} text-xs transition-all duration-300 transform translate-y-2 opacity-0`;
+                item.innerHTML = `<span class="font-bold uppercase tracking-wider"><i class="fas fa-circle text-[6px] mr-1 opacity-70"></i>${agent}</span><p class="mt-1.5 text-slate-700 font-medium">${content}</p>`;
+                consoleWrapper.appendChild(item);
+                requestAnimationFrame(() => {
+                    item.classList.remove('translate-y-2', 'opacity-0');
+                });
+                consoleWrapper.scrollTop = consoleWrapper.scrollHeight;
+            }
+
+            function renderMarkdown(md) {
+                return md.split('\n').map(line => {
+                    let t = line.trim();
+                    if (!t) return '';
+                    if (t.startsWith('# ')) return `<h2 class="font-bold text-lg text-indigo-600 mt-5 mb-3 border-b border-indigo-100 pb-2">${t.substring(2)}</h2>`;
+                    if (t.startsWith('## ')) return `<h3 class="font-bold text-slate-900 mt-5 mb-2 flex items-center"><i class="fas fa-check-circle text-emerald-500 mr-2 text-sm"></i>${t.substring(3)}</h3>`;
+                    if (t.startsWith('- **')) {
+                        let match = t.match(/- \*\*(.*?)\*\*(：|:)(.*)/);
+                        if (match) return `<div class="mt-2 text-slate-700 bg-white border border-slate-100 p-3 rounded-lg shadow-sm"><span class="font-bold text-indigo-600 block mb-1">▪ ${match[1]}</span><span class="leading-relaxed text-xs">${match[3]}</span></div>`;
+                    }
+                    return `<p class="mt-2 text-slate-700 text-sm leading-relaxed">${t}</p>`;
+                }).join('');
+            }
+        }
+    </script>
+</body>
+</html>

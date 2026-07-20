@@ -1,0 +1,72 @@
+[
+  {
+    "id": "paged_attention_001",
+    "query": "分析 PagedAttention 机制的显存优化原理及其对高并发推理吞吐的影响",
+    "difficulty": "medium",
+    "expected_keywords": ["KV cache", "虚拟内存", "内存碎片", "block", "vLLM"],
+    "category": "inference_optimization"
+  },
+  {
+    "id": "flash_attention_002",
+    "query": "FlashAttention 如何通过 IO-aware 算法减少 HBM 访问？分析其在长序列场景下的边界效应",
+    "difficulty": "medium",
+    "expected_keywords": ["tiling", "recompute", "HBM", "SRAM", "IO复杂度"],
+    "category": "attention_mechanism"
+  },
+  {
+    "id": "speculative_decoding_003",
+    "query": "投机解码（Speculative Decoding）的加速原理是什么？分析 draft model 和目标模型之间的协同机制",
+    "difficulty": "medium",
+    "expected_keywords": ["draft model", "verification", "speculation", "latency"],
+    "category": "inference_optimization"
+  },
+  {
+    "id": "quantization_004",
+    "query": "比较 GPTQ、AWQ 和 QLoRA 三种量化方法的适用场景和性能差异",
+    "difficulty": "hard",
+    "expected_keywords": ["GPTQ", "AWQ", "QLoRA", "量化", "精度损失", "校准数据"],
+    "category": "model_compression"
+  },
+  {
+    "id": "moe_005",
+    "query": "Mixture of Experts (MoE) 架构在高并发推理时面临的负载均衡挑战及解决方案",
+    "difficulty": "hard",
+    "expected_keywords": ["MoE", "routing", "load balancing", "expert", "Mixtral"],
+    "category": "model_architecture"
+  },
+  {
+    "id": "kv_cache_006",
+    "query": "分析 StreamingLLM 和 H2O 两种 KV cache 淘汰策略的异同及其适用场景",
+    "difficulty": "medium",
+    "expected_keywords": ["attention sink", "KV cache", "eviction", "StreamingLLM", "H2O"],
+    "category": "inference_optimization"
+  },
+  {
+    "id": "rope_007",
+    "query": "RoPE 位置编码相比绝对位置编码有哪些优势？YARN 如何扩展 RoPE 的上下文窗口？",
+    "difficulty": "easy",
+    "expected_keywords": ["RoPE", "旋转位置编码", "YARN", "上下文窗口", "插值"],
+    "category": "attention_mechanism"
+  },
+  {
+    "id": "distributed_008",
+    "query": "大模型分布式推理中，Tensor Parallelism 和 Pipeline Parallelism 各自解决什么瓶颈？如何组合使用？",
+    "difficulty": "medium",
+    "expected_keywords": ["tensor parallelism", "pipeline parallelism", "通信", "bubble"],
+    "category": "distributed_systems"
+  },
+  {
+    "id": "concurrency_009",
+    "query": "设计一个支持 10 万并发请求的大模型推理网关，要求考虑请求调度、KV cache 复用和容错机制",
+    "difficulty": "hard",
+    "expected_keywords": ["调度", "缓存", "容错", "限流", "负载均衡"],
+    "category": "system_design"
+  },
+  {
+    "id": "long_context_010",
+    "query": "长上下文推理中，如何平衡显存占用和推理延迟？分析 RingAttention 等分布式长序列方案的优劣",
+    "difficulty": "hard",
+    "expected_keywords": ["RingAttention", "显存", "延迟", "分布", "序列并行"],
+    "category": "attention_mechanism"
+  }
+]

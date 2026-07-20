@@ -1,0 +1,156 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Miemie Benchmark Dashboard</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body { font-family: 'Inter', 'PingFang SC', system-ui, sans-serif; background: #f1f5f9; }
+        .card { background: white; border-radius: 16px; padding: 24px; box-shadow: 0 1px 3px rgba(0,0,0,0.08); }
+    </style>
+</head>
+<body class="p-6 max-w-7xl mx-auto">
+    <header class="mb-8">
+        <h1 class="text-2xl font-bold text-slate-900">Miemie Benchmark Dashboard</h1>
+        <p class="text-sm text-slate-500 mt-1">Multi-agent mode comparison — faithfulness, relevance, coherence</p>
+    </header>
+
+    <!-- Summary Cards -->
+    <div id="summaryCards" class="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-8"></div>
+
+    <!-- Radar Chart -->
+    <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
+        <div class="card">
+            <h2 class="text-sm font-semibold text-slate-700 mb-4">Mode Comparison (Radar)</h2>
+            <canvas id="radarChart" height="300"></canvas>
+        </div>
+        <div class="card">
+            <h2 class="text-sm font-semibold text-slate-700 mb-4">Overall Score by Mode</h2>
+            <canvas id="barChart" height="300"></canvas>
+        </div>
+    </div>
+
+    <!-- Per-Test-Case Table -->
+    <div class="card">
+        <h2 class="text-sm font-semibold text-slate-700 mb-4">Per-Case Breakdown</h2>
+        <div class="overflow-x-auto">
+            <table class="w-full text-sm">
+                <thead>
+                    <tr class="border-b text-slate-500 text-left">
+                        <th class="py-2 pr-4">Case</th>
+                        <th class="py-2 px-2">Baseline</th>
+                        <th class="py-2 px-2">Single Critic</th>
+                        <th class="py-2 px-2">Multi-Round</th>
+                        <th class="py-2 px-2">Debate</th>
+                    </tr>
+                </thead>
+                <tbody id="tableBody"></tbody>
+            </table>
+        </div>
+    </div>
+
+    <p class="text-xs text-slate-400 mt-4 text-center" id="dataNote">Loading benchmark data...</p>
+
+<script>
+async function loadData() {
+    try {
+        const res = await fetch('comparison_report.json');
+        const data = await res.json();
+        render(data);
+    } catch (e) {
+        document.getElementById('dataNote').textContent = 'No benchmark data found. Run "python benchmark/run_benchmark.py" first.';
+    }
+}
+
+function render(data) {
+    const { results, summary } = data;
+    const modes = ['baseline_single', 'single_critic', 'multi_round', 'debate'];
+    const modeLabels = ['Baseline', 'Single Critic', 'Multi-Round', 'Debate'];
+    const colors = ['#94a3b8', '#f59e0b', '#3b82f6', '#8b5cf6'];
+
+    // Summary cards
+    let cardsHTML = '';
+    modes.forEach((mode, i) => {
+        const s = summary[mode];
+        if (!s) return;
+        cardsHTML += `
+            <div class="card border-t-4" style="border-color: ${colors[i]}">
+                <div class="text-xs text-slate-500 font-medium uppercase tracking-wide">${modeLabels[i]}</div>
+                <div class="text-3xl font-bold text-slate-900 mt-2">${s.overall?.toFixed(1) || '-'}</div>
+                <div class="text-xs text-slate-400 mt-1">Overall (0-10)</div>
+                <div class="grid grid-cols-3 gap-2 mt-3 text-xs text-slate-500">
+                    <div>F: ${s.faithfulness?.toFixed(1)}</div>
+                    <div>R: ${s.relevance?.toFixed(1)}</div>
+                    <div>C: ${s.coherence?.toFixed(1)}</div>
+                </div>
+            </div>`;
+    });
+    document.getElementById('summaryCards').innerHTML = cardsHTML;
+
+    // Radar chart
+    const radarCtx = document.getElementById('radarChart').getContext('2d');
+    new Chart(radarCtx, {
+        type: 'radar',
+        data: {
+            labels: ['Faithfulness', 'Relevance', 'Coherence'],
+            datasets: modes.filter(m => summary[m]).map((mode, i) => ({
+                label: modeLabels[i],
+                data: [summary[mode].faithfulness, summary[mode].relevance, summary[mode].coherence],
+                borderColor: colors[i],
+                backgroundColor: colors[i] + '20',
+                borderWidth: 2,
+            })),
+        },
+        options: {
+            scales: { r: { min: 0, max: 10, ticks: { stepSize: 2 } } },
+            plugins: { legend: { position: 'bottom' } },
+        },
+    });
+
+    // Bar chart
+    const barCtx = document.getElementById('barChart').getContext('2d');
+    new Chart(barCtx, {
+        type: 'bar',
+        data: {
+            labels: modeLabels.filter((_, i) => summary[modes[i]]),
+            datasets: [{
+                label: 'Overall Score',
+                data: modes.filter(m => summary[m]).map(m => summary[m].overall),
+                backgroundColor: modes.filter(m => summary[m]).map((_, i) => colors[i]),
+                borderRadius: 8,
+            }],
+        },
+        options: {
+            scales: { y: { min: 0, max: 10 } },
+            plugins: { legend: { display: false } },
+        },
+    });
+
+    // Per-case table
+    const cases = [...new Set(results.map(r => r.case_id))];
+    let tableHTML = '';
+    cases.forEach(caseId => {
+        const caseResults = {};
+        results.filter(r => r.case_id === caseId).forEach(r => {
+            const s = r.scores;
+            caseResults[r.mode] = ((s.faithfulness || 0) + (s.relevance || 0) + (s.coherence || 0)) / 3;
+        });
+        tableHTML += `<tr class="border-b border-slate-100">
+            <td class="py-2 pr-4 font-medium text-slate-700">${caseId}</td>
+            ${modes.map(m => {
+                const score = caseResults[m];
+                const color = score >= 7 ? 'text-emerald-600' : score >= 5 ? 'text-amber-600' : 'text-rose-500';
+                return `<td class="py-2 px-2 ${color} font-semibold">${score ? score.toFixed(1) : '-'}</td>`;
+            }).join('')}
+        </tr>`;
+    });
+    document.getElementById('tableBody').innerHTML = tableHTML;
+    document.getElementById('dataNote').textContent = `Last updated: ${new Date().toLocaleString()}`;
+}
+
+loadData();
+</script>
+</body>
+</html>
