@@ -181,9 +181,7 @@ locust -f locustfile.py --host=http://localhost:8000
 
 ## 📸 界面截图
 
-![Dashboard](docs/demo.png)
-
-> *SSE 流式驱动的实时智能体工作流可视化，每个智能体完成后逐节点动画展示。*
+> 启动服务后打开 `http://localhost:8000` 即可看到实时交互界面，SSE 流式驱动逐节点动画展示每个智能体的执行进度。
 
 ---
 

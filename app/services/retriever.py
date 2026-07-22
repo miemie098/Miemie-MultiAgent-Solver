@@ -118,25 +118,14 @@ class MiemieHybridRetriever:
         self.bm25: Optional[BM25Okapi] = None
         self._build_bm25_index()
 
-        # ── Cross-Encoder reranker (graceful degradation) ──
-        self.rerank_tokenizer = None
-        self.rerank_model = None
+        # ── Cross-Encoder reranker ──
         reranker_model = os.getenv("RERANKER_MODEL_PATH", "BAAI/bge-reranker-large")
-        try:
-            logger.info("Loading reranker: %s", reranker_model)
-            self.rerank_tokenizer = AutoTokenizer.from_pretrained(reranker_model)
-            self.rerank_model = AutoModelForSequenceClassification.from_pretrained(reranker_model)
-            self.rerank_model.eval()
-        except Exception as exc:
-            logger.warning(
-                "Reranker model unavailable (%s). "
-                "Retrieval will use fusion-only mode (dense + sparse) without Cross-Encoder reranking. "
-                "To enable reranking, download %s manually or set RERANKER_MODEL_PATH.",
-                exc, reranker_model,
-            )
+        logger.info("Loading reranker: %s", reranker_model)
+        self.rerank_tokenizer = AutoTokenizer.from_pretrained(reranker_model)
+        self.rerank_model = AutoModelForSequenceClassification.from_pretrained(reranker_model)
+        self.rerank_model.eval()
 
-        logger.info("Hybrid retriever ready — corpus=%d docs, reranker=%s",
-                     len(self.corpus), "enabled" if self.rerank_model else "disabled")
+        logger.info("Hybrid retriever ready — corpus=%d docs, reranker=enabled", len(self.corpus))
 
     # ── Collection management ──────────────────────────────────────────
 
@@ -320,11 +309,9 @@ class MiemieHybridRetriever:
     def _cross_encoder_rerank(
         self, query: str, candidates: List[str], top_k: int
     ) -> List[str]:
-        """Re-rank candidates with Cross-Encoder. Falls back to identity if unavailable."""
+        """Re-rank candidates with Cross-Encoder."""
         if not candidates:
             return []
-        if self.rerank_model is None or self.rerank_tokenizer is None:
-            return candidates[:top_k]  # no reranker — return fusion results as-is
 
         pairs = [[query, doc] for doc in candidates]
         with torch.no_grad():
