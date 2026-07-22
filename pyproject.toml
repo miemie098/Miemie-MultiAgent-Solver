@@ -13,6 +13,7 @@ dependencies = [
     "langchain-core>=1.4.0",
     "langchain-openai>=1.2.0",
     "langchain-community>=0.4.0",
+    "langchain-huggingface>=0.1.0",
     "langgraph>=1.2.0",
     "langgraph-checkpoint>=4.0.0",
 
@@ -21,9 +22,12 @@ dependencies = [
     "uvicorn[standard]>=0.27.0",
     "pydantic>=2.0.0",
 
-    # Vector store & embeddings
-    "chromadb>=0.5.0",
+    # Vector store & hybrid retrieval (Milvus + BM25 + Cross-Encoder)
+    "pymilvus>=2.4.0",
+    "rank-bm25>=0.2.2",
     "sentence-transformers>=2.7.0",
+    "transformers>=4.40.0",
+    "torch>=2.0.0",
 
     # LLM client
     "openai>=2.0.0",
@@ -36,6 +40,7 @@ dependencies = [
 dev = [
     "pytest>=8.0.0",
     "pytest-asyncio>=0.23.0",
+    "locust>=2.20.0",
 ]
 
 [tool.pytest.ini_options]

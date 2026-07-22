@@ -16,8 +16,8 @@ COPY app/ ./app/
 COPY tests/ ./tests/
 COPY benchmark/ ./benchmark/
 
-# Pre-download the embedding model (optional, speeds up first run)
-RUN python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('all-MiniLM-L6-v2')" || true
+# Pre-download embedding + reranker models (optional, speeds up first run)
+RUN python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('all-mpnet-base-v2')" || true
 
 EXPOSE 8000
 

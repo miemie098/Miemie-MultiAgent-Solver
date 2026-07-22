@@ -1,33 +1,59 @@
-# mcp_server/server.py
+"""
+MCP Knowledge Server — exposes hybrid retrieval as an MCP tool.
+
+Uses the shared hybrid retriever (Milvus + BM25 + Cross-Encoder) so the MCP
+server benefits from the same production-grade retrieval pipeline as the main app.
+"""
 import os
+import sys
+
+_PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if _PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, _PROJECT_ROOT)
+
 from mcp.server.fastmcp import FastMCP
-from langchain_community.vectorstores import Chroma
-from langchain_community.embeddings import HuggingFaceEmbeddings
+from app.services.retriever import get_retriever
+
+# ── Lazy-load retriever ────────────────────────────────────────────────
+_retriever = None
 
 
-# 封装后的检索逻辑
-class DocumentRetriever:
-    BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    DB_DIR = os.path.join(BASE_DIR, "data", "chroma_db")
-
-    _embeddings = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
-    _vectorstore = Chroma(persist_directory=DB_DIR, embedding_function=_embeddings)
-
-    @classmethod
-    def get_relevant_context(cls, query: str):
-        try:
-            docs = cls._vectorstore.similarity_search(query, k=3)
-            return "\n".join([doc.page_content for doc in docs])
-        except Exception as e:
-            return f"检索失败: {str(e)}"
+def _get_retriever():
+    global _retriever
+    if _retriever is None:
+        if not os.getenv("HF_ENDPOINT"):
+            os.environ["HF_ENDPOINT"] = "https://hf-mirror.com"
+        _retriever = get_retriever()
+    return _retriever
 
 
-# 初始化
+# ── MCP server ─────────────────────────────────────────────────────────
 mcp = FastMCP("Miemie-Knowledge-Server")
 
 
-# 统一对外接口
 @mcp.tool()
 def retrieve_ai_papers(query: str) -> str:
-    """设计 AI 架构时调用，返回本地向量库中的前沿技术事实。"""
-    return DocumentRetriever.get_relevant_context(query)
+    """Search the local AI infrastructure knowledge base for relevant technical facts.
+
+    Uses hybrid retrieval: Milvus dense search + BM25 sparse search
+    fused and re-ranked with a Cross-Encoder for high precision.
+    """
+    try:
+        retriever = _get_retriever()
+        docs = retriever.retrieve(query, top_k=3)
+        if not docs:
+            return "未检索到相关内容。"
+        return "\n".join(doc.page_content for doc in docs)
+    except Exception as exc:
+        return f"检索失败: {exc}"
+
+
+@mcp.tool()
+def get_knowledge_base_stats() -> str:
+    """Return statistics about the knowledge base (document count, etc.)."""
+    try:
+        retriever = _get_retriever()
+        size = retriever.get_corpus_size()
+        return f"知识库共收录 {size} 个文本片段，覆盖 FlashAttention、vLLM、GPTQ、MoE 等 AI 基础设施主题。"
+    except Exception as exc:
+        return f"无法获取知识库状态: {exc}"

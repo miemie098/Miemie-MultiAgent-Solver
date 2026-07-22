@@ -20,6 +20,9 @@ venv/
 .venv/
 
 data/chroma_db/
+data/milvus.db
+data/milvus.db.lock
+data/milvus.db.wal/
 data/pdfs/
 data/markdowns/
 

@@ -8,8 +8,8 @@ services:
     env_file:
       - .env
     volumes:
-      - chroma_data:/app/data/chroma_db
+      - milvus_data:/app/data
     restart: unless-stopped
 
 volumes:
-  chroma_data:
+  milvus_data:

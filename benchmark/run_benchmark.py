@@ -241,9 +241,11 @@ async def main():
 
 
 def _compute_summary(results: list, test_cases: list) -> dict:
-    """Aggregate scores by mode."""
+    """Aggregate scores by mode, difficulty, and category."""
     modes = ["baseline_single", "single_critic", "multi_round", "debate"]
-    summary = {}
+
+    # ── Overall summary ──
+    overall = {}
     for mode in modes:
         mode_results = [r for r in results if r["mode"] == mode]
         if not mode_results:
@@ -255,31 +257,134 @@ def _compute_summary(results: list, test_cases: list) -> dict:
             "elapsed_sec": round(sum(r.get("elapsed_sec", 0) for r in mode_results) / len(mode_results), 1),
         }
         avg["overall"] = round((avg["faithfulness"] + avg["relevance"] + avg["coherence"]) / 3, 2)
-        summary[mode] = avg
-    return summary
+        overall[mode] = avg
+
+    # ── Per-difficulty breakdown ──
+    difficulties = ["easy", "medium", "hard"]
+    by_difficulty = {}
+    for diff in difficulties:
+        diff_results = [r for r in results if r.get("difficulty") == diff]
+        mode_scores = {}
+        for mode in modes:
+            mr = [r for r in diff_results if r["mode"] == mode]
+            if mr:
+                mode_scores[mode] = round(
+                    sum(r["scores"].get("faithfulness", 0) + r["scores"].get("relevance", 0) + r["scores"].get("coherence", 0)
+                        for r in mr) / (len(mr) * 3), 2
+                )
+        by_difficulty[diff] = mode_scores
+
+    # ── Per-category breakdown ──
+    categories = sorted(set(r.get("category", "unknown") for r in results))
+    by_category = {}
+    for cat in categories:
+        cat_results = [r for r in results if r.get("category") == cat]
+        mode_scores = {}
+        for mode in modes:
+            mr = [r for r in cat_results if r["mode"] == mode]
+            if mr:
+                mode_scores[mode] = round(
+                    sum(r["scores"].get("faithfulness", 0) + r["scores"].get("relevance", 0) + r["scores"].get("coherence", 0)
+                        for r in mr) / (len(mr) * 3), 2
+                )
+        by_category[cat] = mode_scores
+
+    # ── Key findings ──
+    best_overall = max(overall.items(), key=lambda x: x[1]["overall"])
+    fastest = min(overall.items(), key=lambda x: x[1]["elapsed_sec"])
+    most_faithful = max(overall.items(), key=lambda x: x[1]["faithfulness"])
+
+    findings = [
+        f"🥇 {best_overall[0]} 综合得分最高 ({best_overall[1]['overall']:.2f})",
+        f"⚡ {fastest[0]} 速度最快 ({fastest[1]['elapsed_sec']:.1f}s)",
+        f"📚 {most_faithful[0]} 忠实度最优 ({most_faithful[1]['faithfulness']:.2f})",
+    ]
+    # Multi-round vs single-critic comparison
+    if "multi_round" in overall and "single_critic" in overall:
+        mr = overall["multi_round"]["overall"]
+        sc = overall["single_critic"]["overall"]
+        diff = mr - sc
+        if diff < 0:
+            findings.append(f"⚠️ 多轮反思比单审查低 {abs(diff):.2f} 分 — 压缩环节存在信息损失")
+        else:
+            findings.append(f"✅ 多轮反思优于单审查 +{diff:.2f} 分")
+    # Debate vs single-critic
+    if "debate" in overall and "single_critic" in overall:
+        db = overall["debate"]["overall"]
+        sc = overall["single_critic"]["overall"]
+        diff = db - sc
+        if diff > 0:
+            findings.append(f"🏆 辩论模式优于单审查 +{diff:.2f} 分 — 并行多元审查 > 串行反复修改")
+
+    return {
+        "overall": overall,
+        "by_difficulty": by_difficulty,
+        "by_category": by_category,
+        "key_findings": findings,
+    }
 
 
 def _print_summary(summary: dict):
-    print("\n" + "=" * 70)
-    print("BENCHMARK RESULTS — Average Scores (0-10)")
-    print("=" * 70)
-    print(f"{'Mode':<20} {'Faith':<8} {'Relev':<8} {'Coher':<8} {'Overall':<8} {'Time(s)':<8}")
-    print("-" * 70)
-    for mode, scores in summary.items():
+    overall = summary["overall"]
+
+    print("\n" + "=" * 80)
+    print("  BENCHMARK RESULTS — Multi-Agent Reflective Solver")
+    print("=" * 80)
+
+    # ── Overall table ──
+    print("\n📊 综合评分 (0-10):")
+    print(f"{'Mode':<22} {'忠实度':<8} {'相关性':<8} {'连贯性':<8} {'综合':<8} {'耗时(s)':<10}")
+    print("-" * 80)
+    for mode, scores in overall.items():
+        name = {
+            "baseline_single": "Baseline (单轮)",
+            "single_critic": "单审查模式",
+            "multi_round": "多轮反思 (3轮)",
+            "debate": "辩论模式 (3审查)",
+        }.get(mode, mode)
         print(
-            f"{mode:<20} "
+            f"{name:<22} "
             f"{scores['faithfulness']:<8.2f} "
             f"{scores['relevance']:<8.2f} "
             f"{scores['coherence']:<8.2f} "
             f"{scores['overall']:<8.2f} "
-            f"{scores['elapsed_sec']:<8.1f}"
+            f"{scores['elapsed_sec']:<10.1f}"
         )
-    print("=" * 70)
 
-    # Find best mode
-    if summary:
-        best = max(summary.items(), key=lambda x: x[1]["overall"])
-        print(f"\nBest mode: {best[0]} (overall={best[1]['overall']:.2f})")
+    # ── Per-difficulty ──
+    if summary.get("by_difficulty"):
+        print("\n📈 按难度分层的综合得分:")
+        print(f"{'难度':<12}", end="")
+        modes_order = ["baseline_single", "single_critic", "multi_round", "debate"]
+        mode_names = ["Baseline", "单审查", "多轮反思", "辩论"]
+        for mn in mode_names:
+            print(f"{mn:<12}", end="")
+        print()
+        print("-" * 60)
+        for diff in ["easy", "medium", "hard"]:
+            scores = summary["by_difficulty"].get(diff, {})
+            print(f"{diff:<12}", end="")
+            for mode in modes_order:
+                s = scores.get(mode, "-")
+                if isinstance(s, (int, float)):
+                    print(f"{s:<12.2f}", end="")
+                else:
+                    print(f"{'-':<12}", end="")
+            print()
+
+    # ── Key findings ──
+    print("\n🔍 关键发现:")
+    for finding in summary.get("key_findings", []):
+        print(f"  {finding}")
+
+    print("\n" + "=" * 80)
+
+    # ── Top recommendation ──
+    if overall:
+        best = max(overall.items(), key=lambda x: x[1]["overall"])
+        print(f"\n💡 推荐生产模式: {best[0]} (综合 {best[1]['overall']:.2f})")
+        print(f"   > 打开 benchmark/dashboard.html 查看交互式可视化对比。")
+        print(f"   > 压测命令: locust -f locustfile.py --host=http://localhost:8000")
 
 
 if __name__ == "__main__":

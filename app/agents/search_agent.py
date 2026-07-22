@@ -1,18 +1,17 @@
 """
-Search Agent — RAG retrieval from local ChromaDB vector store.
+Search Agent — Hybrid RAG retrieval (Milvus + BM25 + Cross-Encoder rerank).
 
-Embeds the user query and retrieves the top-k most relevant document chunks
-from the ingested AI research papers and technical documentation.
+Embeds the user query, runs dense + sparse search in parallel, fuses results,
+and re-ranks with a Cross-Encoder for high-quality context retrieval.
 
 Uses HuggingFace mirror for faster model downloads in China.
 Set HF_ENDPOINT env var to override (e.g. https://hf-mirror.com).
 """
 import logging
 import os
-import sys
 
 from app.graph.state import GraphState
-from app.agents.config import LLMFactory
+from app.services.retriever import get_retriever
 
 logger = logging.getLogger("miemie.search")
 
@@ -22,57 +21,40 @@ if not os.getenv("HF_ENDPOINT"):
 
 
 class SearchAgent:
-    """RAG retrieval agent. Downloads the embedding model on first use."""
+    """Hybrid RAG retrieval agent (Milvus dense + BM25 sparse + Cross-Encoder rerank)."""
 
     def __init__(self):
-        self._embeddings = None
-        self._vectorstore = None
-        self.llm = LLMFactory.get_llm(temperature=0.1)
-        self._init_attempted = False
+        self._initialized = False
 
-    def _lazy_init(self):
-        """Lazy-load embeddings and vector store (downloads model on first call)."""
-        if self._init_attempted:
-            return self._vectorstore is not None
-        self._init_attempted = True
-
-        try:
-            from langchain_community.embeddings import HuggingFaceEmbeddings
-            from langchain_community.vectorstores import Chroma
-
-            logger.info("Loading embedding model all-MiniLM-L6-v2 (first time may download ~80MB)...")
-            self._embeddings = HuggingFaceEmbeddings(
-                model_name="all-MiniLM-L6-v2",
-                model_kwargs={"device": "cpu"},
-            )
-            logger.info("Embedding model loaded successfully")
-
-            base_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-            db_dir = os.path.join(base_dir, "data", "chroma_db")
-
-            self._vectorstore = Chroma(
-                persist_directory=db_dir, embedding_function=self._embeddings
-            )
-            logger.info("ChromaDB connected, collection size: %d", self._vectorstore._collection.count())
+    def _lazy_init(self) -> bool:
+        """Lazy-load retriever and verify it has data."""
+        if self._initialized:
             return True
 
-        except Exception as e:
-            logger.error("Failed to initialize vector search: %s", e)
-            logger.warning("SearchAgent will run in passthrough mode (no RAG context)")
+        try:
+            self.retriever = get_retriever()
+            corpus_size = self.retriever.get_corpus_size()
+            if corpus_size == 0:
+                logger.warning(
+                    "Milvus collection is empty. Run 'python mcp_server/ingest_docs.py' first."
+                )
+            self._initialized = True
+            return True
+        except Exception as exc:
+            logger.error("Failed to initialize hybrid retriever: %s", exc)
             return False
 
     async def run(self, state: GraphState) -> dict:
         query = state.get("query", "")
 
-        # Try lazy init — if it fails, skip RAG and pass through
         if not self._lazy_init():
             logger.warning("SearchAgent running in passthrough mode")
             return self._passthrough(state)
 
-        logger.info("SearchAgent retrieving context for: %s...", query[:80])
+        logger.info("SearchAgent running hybrid retrieval for: %s...", query[:80])
 
         try:
-            docs = self._vectorstore.similarity_search(query, k=3)
+            docs = self.retriever.retrieve(query, top_k=4)
 
             if not docs:
                 context = "未检索到高度相关的背景知识，请大模型基于自身知识库推演。"
@@ -86,7 +68,10 @@ class SearchAgent:
 
             new_log = {
                 "agent": "Search Agent",
-                "content": f"成功从本地 ChromaDB 检索到 {len(docs)} 个高价值技术切片。",
+                "content": (
+                    f"混合检索（Milvus Dense + BM25 Sparse + Cross-Encoder）完成，"
+                    f"从 {self.retriever.get_corpus_size()} 篇文档中检索到 {len(docs)} 个高价值技术切片。"
+                ),
             }
 
             return {
@@ -95,15 +80,15 @@ class SearchAgent:
                 "history_logs": state.get("history_logs", []) + [new_log],
             }
 
-        except Exception as e:
-            logger.error("SearchAgent retrieval failed: %s", e)
+        except Exception as exc:
+            logger.error("SearchAgent retrieval failed: %s", exc)
             return self._passthrough(state)
 
     def _passthrough(self, state: GraphState) -> dict:
         """Fallback: let the LLM answer from its own knowledge."""
         new_log = {
             "agent": "Search Agent",
-            "content": "向量检索跳过，LLM 将基于自身知识库进行推演。",
+            "content": "混合检索跳过，LLM 将基于自身知识库进行推演。",
         }
         return {
             "search_output": {"context": ""},
