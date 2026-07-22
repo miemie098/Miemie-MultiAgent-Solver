@@ -24,6 +24,7 @@ dependencies = [
 
     # Vector store & hybrid retrieval (Milvus + BM25 + Cross-Encoder)
     "pymilvus>=2.4.0",
+        "milvus-lite>=3.0.0",
     "rank-bm25>=0.2.2",
     "sentence-transformers>=2.7.0",
     "transformers>=4.40.0",

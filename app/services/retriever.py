@@ -6,6 +6,14 @@ retrieval pipeline, matching the technical depth of Miemie-Agent-RAG.
 """
 import logging
 import os
+
+# Use HF mirror for faster downloads from China (set BEFORE importing HF modules)
+if not os.getenv("HF_ENDPOINT"):
+    os.environ["HF_ENDPOINT"] = "https://hf-mirror.com"
+
+# Suppress gRPC GOAWAY noise from Milvus embedded mode on Windows
+os.environ.setdefault("GRPC_VERBOSITY", "ERROR")
+
 from typing import List, Optional
 
 import numpy as np
@@ -79,13 +87,26 @@ class MiemieHybridRetriever:
         milvus_db_path = os.path.join(project_root, "data", "milvus.db")
         os.makedirs(os.path.dirname(milvus_db_path), exist_ok=True)
 
-        # ── Embedding model (dense) ──
-        logger.info("Loading embedding model all-mpnet-base-v2 ...")
-        self.dense_embeddings = HuggingFaceEmbeddings(
-            model_name="sentence-transformers/all-mpnet-base-v2",
-            model_kwargs={"device": "cpu"},
+        # ── Embedding model (dense) — try mpnet first, fall back to MiniLM ──
+        embedding_model = os.getenv(
+            "EMBEDDING_MODEL_PATH", "sentence-transformers/all-mpnet-base-v2"
         )
-        self._embedding_dim = self.dense_embeddings.client.get_sentence_embedding_dimension()
+        try:
+            logger.info("Loading embedding model: %s", embedding_model)
+            self.dense_embeddings = HuggingFaceEmbeddings(
+                model_name=embedding_model,
+                model_kwargs={"device": "cpu"},
+            )
+        except Exception as exc:
+            logger.warning("Failed to load %s: %s — falling back to all-MiniLM-L6-v2", embedding_model, exc)
+            self.dense_embeddings = HuggingFaceEmbeddings(
+                model_name="sentence-transformers/all-MiniLM-L6-v2",
+                model_kwargs={"device": "cpu"},
+            )
+        try:
+            self._embedding_dim = self.dense_embeddings._client.get_embedding_dimension()
+        except Exception:
+            self._embedding_dim = getattr(self.dense_embeddings, "_embedding_dim", 768)
         logger.info("Embedding dim = %d", self._embedding_dim)
 
         # ── Milvus (embedded) ──
@@ -97,13 +118,25 @@ class MiemieHybridRetriever:
         self.bm25: Optional[BM25Okapi] = None
         self._build_bm25_index()
 
-        # ── Cross-Encoder reranker ──
+        # ── Cross-Encoder reranker (graceful degradation) ──
+        self.rerank_tokenizer = None
+        self.rerank_model = None
         reranker_model = os.getenv("RERANKER_MODEL_PATH", "BAAI/bge-reranker-large")
-        logger.info("Loading reranker: %s", reranker_model)
-        self.rerank_tokenizer = AutoTokenizer.from_pretrained(reranker_model)
-        self.rerank_model = AutoModelForSequenceClassification.from_pretrained(reranker_model)
-        self.rerank_model.eval()
-        logger.info("Hybrid retriever ready — corpus=%d docs", len(self.corpus))
+        try:
+            logger.info("Loading reranker: %s", reranker_model)
+            self.rerank_tokenizer = AutoTokenizer.from_pretrained(reranker_model)
+            self.rerank_model = AutoModelForSequenceClassification.from_pretrained(reranker_model)
+            self.rerank_model.eval()
+        except Exception as exc:
+            logger.warning(
+                "Reranker model unavailable (%s). "
+                "Retrieval will use fusion-only mode (dense + sparse) without Cross-Encoder reranking. "
+                "To enable reranking, download %s manually or set RERANKER_MODEL_PATH.",
+                exc, reranker_model,
+            )
+
+        logger.info("Hybrid retriever ready — corpus=%d docs, reranker=%s",
+                     len(self.corpus), "enabled" if self.rerank_model else "disabled")
 
     # ── Collection management ──────────────────────────────────────────
 
@@ -131,9 +164,11 @@ class MiemieHybridRetriever:
         self.client.create_index(
             collection_name=self.COLLECTION_NAME,
             field_name="vector",
-            index_type="IVF_FLAT",
-            metric_type="COSINE",
-            params={"nlist": 128},
+            index_params={
+                "index_type": "IVF_FLAT",
+                "metric_type": "COSINE",
+                "params": {"nlist": 128},
+            },
         )
         self.client.load_collection(self.COLLECTION_NAME)
         logger.info("Collection '%s' created", self.COLLECTION_NAME)
@@ -163,23 +198,37 @@ class MiemieHybridRetriever:
 
     # ── Ingestion (called by ingest_docs.py) ──────────────────────────
 
-    def insert(self, chunks: List[str]) -> int:
-        """Insert document chunks into Milvus. Returns count inserted."""
+    def insert(self, chunks: List[str], batch_size: int = 32) -> int:
+        """Insert document chunks into Milvus in batches with progress output.
+
+        Returns total count inserted.
+        """
         if not chunks:
             return 0
 
-        embeddings = self.dense_embeddings.embed_documents(chunks)
-        data = [
-            {"text": text, "vector": vec}
-            for text, vec in zip(chunks, embeddings)
-        ]
-        result = self.client.insert(collection_name=self.COLLECTION_NAME, data=data)
-        inserted = result.get("insert_count", len(chunks))
+        total = len(chunks)
+        total_inserted = 0
+
+        for i in range(0, total, batch_size):
+            batch = chunks[i:i + batch_size]
+            batch_num = i // batch_size + 1
+            total_batches = (total + batch_size - 1) // batch_size
+
+            print(f"   🔄 Embedding batch {batch_num}/{total_batches} ({len(batch)} chunks) ...")
+            embeddings = self.dense_embeddings.embed_documents(batch)
+            data = [
+                {"text": text, "vector": vec}
+                for text, vec in zip(batch, embeddings)
+            ]
+            result = self.client.insert(collection_name=self.COLLECTION_NAME, data=data)
+            inserted = result.get("insert_count", len(batch))
+            total_inserted += inserted
+            print(f"   ✅ Batch {batch_num}: {inserted} inserted ({total_inserted}/{total} total)")
 
         # Rebuild BM25 to include new docs
         self._build_bm25_index()
-        logger.info("Inserted %d chunks, corpus now %d docs", inserted, len(self.corpus))
-        return inserted
+        logger.info("Inserted %d chunks, corpus now %d docs", total_inserted, len(self.corpus))
+        return total_inserted
 
     # ── Dense search ───────────────────────────────────────────────────
 
@@ -271,9 +320,11 @@ class MiemieHybridRetriever:
     def _cross_encoder_rerank(
         self, query: str, candidates: List[str], top_k: int
     ) -> List[str]:
-        """Re-rank candidates with Cross-Encoder."""
+        """Re-rank candidates with Cross-Encoder. Falls back to identity if unavailable."""
         if not candidates:
             return []
+        if self.rerank_model is None or self.rerank_tokenizer is None:
+            return candidates[:top_k]  # no reranker — return fusion results as-is
 
         pairs = [[query, doc] for doc in candidates]
         with torch.no_grad():
