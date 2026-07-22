@@ -66,7 +66,7 @@ def _get_workflow():
 @app.get("/")
 async def get_frontend_dashboard():
     """Serve the frontend dashboard."""
-    html_path = os.path.join(os.path.dirname(__file__), "index.html")
+    html_path = os.path.join(os.path.dirname(__file__), "static", "index.html")
     return FileResponse(html_path)
 
 

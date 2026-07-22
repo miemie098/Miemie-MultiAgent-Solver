@@ -6,25 +6,25 @@
 [![Python](https://img.shields.io/badge/python-3.10%2B-blue)](https://www.python.org/)
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
-A production-oriented multi-agent system that leverages **LangGraph** state graphs, **RAG** (Retrieval-Augmented Generation), and **LLM-powered debate mechanisms** to perform deep architectural analysis and optimization of AI/ML infrastructure problems.
+面向生产的 AI 基础设施多智能体分析平台，利用 **LangGraph** 状态图、**RAG**（检索增强生成）和 **LLM 驱动的辩论机制**，对 AI/ML 基础设施问题进行深度架构分析与优化。
 
-## ✨ Core Features
+## ✨ 核心特性
 
-- **Multi-Agent Reflective Loop**: 5 specialized agents (Search → Analyze → Critique → Compress → Summarize) working collaboratively through a directed cyclic graph
-- **RAG-Enhanced Analysis**: Local ChromaDB vector store with 17+ AI research papers (FlashAttention, vLLM, GPTQ, Mixtral, etc.) providing grounded technical context
-- **SOP State-Channel Isolation**: Each agent writes exclusively to its own TypedDict channel, preventing state corruption in concurrent executions
-- **Context Sharding**: LLM-powered semantic compression prevents prompt-window explosion during multi-round reflective loops
-- **Streaming SSE Output**: Real-time agent progress visualization via Server-Sent Events
-- **Configurable Modes**: Single-critic mode for cost efficiency; 3-critic debate mode for maximum quality
+- **多智能体反思循环**：5 个专职智能体（搜索 → 分析 → 审查 → 压缩 → 总结）通过有向循环图协同工作
+- **RAG 增强分析**：本地 ChromaDB 向量库收录 17+ 篇 AI 研究论文（FlashAttention、vLLM、GPTQ、Mixtral 等），提供有据可依的技术上下文
+- **SOP 状态通道隔离**：每个智能体独占写入自己的 TypedDict 通道，防止并发执行时的状态污染
+- **上下文分片**：LLM 驱动的语义压缩，防止多轮反思循环中提示窗口膨胀
+- **SSE 流式输出**：通过 Server-Sent Events 实时可视化智能体执行进度
+- **多模式可配**：单审查模式兼顾成本效率；3 审查辩论模式追求最高质量
 
-## 🏗️ Architecture
+## 🏗️ 架构
 
 ```mermaid
 graph TD
-    SEARCH[Search Agent<br/>ChromaDB RAG] --> ANALYZER[Analyzer Agent<br/>Architecture Analysis]
-    ANALYZER --> CRITIC[Critic Agent<br/>Robustness Review]
-    CRITIC -->|passed or max_retries| SUMMARY[Summary Agent<br/>Report Generation]
-    CRITIC -->|rejected| COMPACTOR[Compactor Agent<br/>Context Sharding]
+    SEARCH[搜索智能体<br/>ChromaDB RAG] --> ANALYZER[分析智能体<br/>架构分析]
+    ANALYZER --> CRITIC[审查智能体<br/>健壮性审查]
+    CRITIC -->|通过 或 达到最大重试| SUMMARY[总结智能体<br/>报告生成]
+    CRITIC -->|驳回| COMPACTOR[压缩智能体<br/>上下文分片]
     COMPACTOR --> ANALYZER
 
     style SEARCH fill:#8b5cf6,color:#fff
@@ -34,116 +34,124 @@ graph TD
     style SUMMARY fill:#10b981,color:#fff
 ```
 
-## 🚀 Quick Start
+## 🚀 快速开始
 
-### Prerequisites
+### 环境要求
 - Python 3.10+
-- DeepSeek API Key ([get one here](https://platform.deepseek.com))
+- DeepSeek API Key（[点此获取](https://platform.deepseek.com)）
 
-### Setup
+### 安装步骤
 
 ```bash
-# 1. Clone and enter project
+# 1. 克隆并进入项目
 git clone <your-repo-url> && cd Miemie-MultiAgent-Solver
 
-# 2. Install dependencies
+# 2. 安装依赖
 pip install -r requirements.txt
 
-# 3. Configure environment
+# 3. 配置环境变量
 cp .env.example .env
-# Edit .env and add your DEEPSEEK_API_KEY
+# 编辑 .env，填入你的 DEEPSEEK_API_KEY
 
-# 4. Ingest documents into vector store
+# 4. 将文档灌入向量库
 python mcp_server/ingest_docs.py
 
-# 5. Start the server
+# 5. 启动服务
 uvicorn app.main:app --reload --port 8000
 ```
 
-Open `http://localhost:8000` in your browser, enter an AI infrastructure question, and watch the multi-agent DAG solve it in real-time.
+在浏览器中打开 `http://localhost:8000`，输入一个 AI 基础设施问题，即可实时观看多智能体 DAG 协同求解。
 
-### Docker (recommended)
+### Docker 部署（推荐）
 
 ```bash
 docker-compose up
 ```
 
-## 📂 Project Structure
+## 📂 项目结构
 
 ```
 ├── app/
-│   ├── main.py                  # FastAPI server + endpoints
-│   ├── index.html               # Frontend dashboard (Tailwind CSS)
+│   ├── main.py                  # FastAPI 服务 + API 端点
+│   ├── streaming.py             # SSE 流式支持
+│   ├── static/
+│   │   └── index.html           # 前端仪表盘（Tailwind CSS）
 │   ├── agents/
-│   │   ├── config.py            # LLM factory (singleton pattern)
-│   │   ├── search_agent.py      # ChromaDB RAG retrieval
-│   │   ├── analyzer_agent.py    # Deep architecture analysis
-│   │   ├── critic_agent.py      # Robustness review (JSON-structured output)
-│   │   ├── compactor_agent.py   # Semantic context compression
-│   │   └── summary_agent.py     # Final report formatting
+│   │   ├── config.py            # LLM 工厂（单例模式）
+│   │   ├── search_agent.py      # ChromaDB RAG 检索
+│   │   ├── analyzer_agent.py    # 深度架构分析
+│   │   ├── critic_agent.py      # 健壮性审查（JSON 结构化输出）
+│   │   ├── compactor_agent.py   # 语义上下文压缩
+│   │   ├── summary_agent.py     # 最终报告格式化
+│   │   ├── moderator_agent.py   # 辩论主持人
+│   │   └── debate_critics.py    # 多视角辩论审查
 │   └── graph/
-│       ├── state.py             # GraphState TypedDict schema
-│       └── workflow.py          # LangGraph DAG topology + routing
+│       ├── state.py             # GraphState TypedDict 模式
+│       └── workflow.py          # LangGraph DAG 拓扑与路由
 ├── mcp_server/
-│   ├── server.py                # MCP knowledge server
-│   └── ingest_docs.py           # PDF/Markdown → ChromaDB pipeline
+│   ├── server.py                # MCP 知识库服务
+│   └── ingest_docs.py           # PDF/Markdown → ChromaDB 灌库流水线
 ├── data/
-│   ├── chroma_db/               # Persistent vector store
-│   ├── pdfs/                    # 17 AI research papers
-│   └── markdowns/               # Technical documentation
-├── tests/                       # Test suite
-├── benchmark/                   # Automated evaluation system
-├── requirements.txt             # Python dependencies
+│   ├── chroma_db/               # 持久化向量库
+│   ├── pdfs/                    # 17 篇 AI 研究论文
+│   └── markdowns/               # 技术文档
+├── scripts/
+│   ├── probe_api.py             # API 连通性探测
+│   ├── probe_long_context.py    # 长上下文压力测试
+│   └── download_papers.py       # 补充论文下载
+├── tests/                       # 测试套件
+├── benchmark/                   # 自动化评测系统
+├── requirements.txt             # Python 依赖
 ├── Dockerfile
 ├── docker-compose.yml
 └── README.md
 ```
 
-## 🔧 Tech Stack
+## 🔧 技术栈
 
-| Layer | Technology |
-|-------|-----------|
-| **Agent Framework** | LangGraph 1.2+ |
-| **LLM Provider** | DeepSeek-Chat (via OpenAI-compatible API) |
-| **Vector Store** | ChromaDB (persistent local) |
-| **Embeddings** | all-MiniLM-L6-v2 (via sentence-transformers) |
-| **Web Server** | FastAPI + Uvicorn |
-| **Frontend** | Vanilla JS + Tailwind CSS CDN |
-| **Streaming** | Server-Sent Events (SSE) |
-| **Observability** | LangSmith (optional) |
+| 层级 | 技术选型 |
+|------|---------|
+| **智能体框架** | LangGraph 1.2+ |
+| **LLM 提供商** | DeepSeek-Chat（兼容 OpenAI API） |
+| **向量存储** | ChromaDB（本地持久化） |
+| **嵌入模型** | all-MiniLM-L6-v2（通过 sentence-transformers） |
+| **Web 服务** | FastAPI + Uvicorn |
+| **前端** | 原生 JS + Tailwind CSS CDN |
+| **流式传输** | Server-Sent Events (SSE) |
+| **可观测性** | LangSmith（可选） |
 
-## 📊 Evaluation
+## 📊 评测
 
-Run the automated benchmark to compare agent modes:
+运行自动化基准测试，对比各智能体模式：
 
 ```bash
 python benchmark/run_benchmark.py
 ```
 
-This evaluates 4 configurations (single-pass, single-critic, multi-round, debate) across 10+ test cases, scoring faithfulness, relevance, and coherence via LLM-as-judge.
+对 4 种配置（单轮、单审查、多轮反思、辩论模式）在 10+ 个测试用例上进行评测，通过 LLM-as-Judge 对忠实度、相关性和连贯性进行打分。
 
-### Benchmark Results
+### 基准测试结果
 
-| Mode | Faithfulness | Relevance | Coherence | **Overall** | Avg Time |
-|------|:-----------:|:---------:|:---------:|:-----------:|:--------:|
-| Baseline (single-pass) | 8.40 | 9.40 | 9.50 | **9.10** | 42s |
-| Single Critic | 8.70 | 9.50 | 9.80 | **9.33** | 64s |
-| Multi-Round (3 loops) | 7.70 | 8.60 | 9.40 | **8.57** | 95min |
-| **Debate (3 critics)** | **8.60** | **9.70** | **10.00** | **9.43** 🏆 | 99s |
+| 模式 | 忠实度 | 相关性 | 连贯性 | **综合得分** | 平均耗时 |
+|------|:-----:|:-----:|:-----:|:----------:|:------:|
+| Baseline（单轮） | 8.40 | 9.40 | 9.50 | **9.10** | 42s |
+| Single Critic（单审查） | 8.70 | 9.50 | 9.80 | **9.33** | 64s |
+| Multi-Round（3 轮反思） | 7.70 | 8.60 | 9.40 | **8.57** | 95min |
+| **Debate（3 审查辩论）** | **8.60** | **9.70** | **10.00** | **9.43** 🏆 | 99s |
 
-**Key findings:**
-- 🥇 **Debate mode wins** — 3 parallel critics + moderator consensus outperforms single-critic by +0.10 overall
-- 🔄 **Multi-round reflection degrades quality** — repeated Analyzer → Critic loops cause Compactor-driven information loss, reducing faithfulness by 0.7 vs baseline. This validates the debate design: *parallel diverse review beats serial rework*
-- ⚡ **Single Critic hits the sweet spot** — 9.33 at only 64s, ideal as production default
+**关键发现：**
+- 🥇 **辩论模式最优** — 3 个并行审查 + 主持人共识，综合得分超出单审查模式 +0.10
+- 🔄 **多轮反思反而降低质量** — 反复的分析→审查循环导致压缩环节信息丢失，忠实度相比基线下降 0.7。这验证了设计理念：*并行多元审查优于串行反复修改*
+- ⚡ **单审查模式性价比最高** — 仅 64 秒达到 9.33 分，适合作为生产环境默认配置
 
-> 💡 Open `benchmark/dashboard.html` in a browser for interactive radar/bar charts comparing all 4 modes.
+> 💡 在浏览器中打开 `benchmark/dashboard.html`，可查看 4 种模式的交互式雷达图/柱状图对比。
 
-## 📸 Screenshots
+## 📸 界面截图
 
 ![Dashboard](docs/demo.png)
 
-> *Real-time agent workflow visualization with SSE streaming. Node-by-node animation as each agent completes.*
+> *SSE 流式驱动的实时智能体工作流可视化，每个智能体完成后逐节点动画展示。*
 
 ---
 
-*Built for production-readiness — not just a prototype.*
+*为生产级应用而生 — 不仅仅是原型。*

@@ -2,8 +2,8 @@ import os
 import requests
 from pathlib import Path
 
-# 目标根目录（与您之前的相同）
-DATA_DIR = Path(r"D:\projects\Miemie-MultiAgent-Solver\data")
+# 项目根目录的 data/ 文件夹（脚本位于 scripts/ 目录，向上一级即项目根目录）
+DATA_DIR = Path(__file__).resolve().parent.parent / "data"
 
 # 已存在的文件列表（基于您日志中的成功文件，用于跳过）
 EXISTING_FILES = {
