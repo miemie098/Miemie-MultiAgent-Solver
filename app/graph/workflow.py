@@ -111,8 +111,48 @@ def create_workflow():
 # ---------------------------------------------------------------------------
 # Debate mode internals
 # ---------------------------------------------------------------------------
+async def _retry_critic(critic, query: str, analysis: str,
+                         max_retries: int = 3, base_delay: float = 1.0):
+    """Node-level retry for a single critic with exponential backoff.
+
+    Only retries on transient failures (network, timeout, rate-limit).
+    Search and Analyze results are untouched — this is pure re-entrant,
+    so retrying a failed critic loses zero prior computation.
+
+    Args:
+        critic: A BaseCriticPersona instance.
+        query: The original user query (from state, unchanged).
+        analysis: The Analyzer output (from state, unchanged).
+        max_retries: Total attempts (including the first call).
+        base_delay: Initial backoff in seconds (doubles each retry).
+    """
+    persona = critic.__class__.__name__
+    last_exc = None
+
+    for attempt in range(max_retries):
+        try:
+            if attempt > 0:
+                logger.info("%s retry %d/%d ...", persona, attempt, max_retries - 1)
+            return await critic.critique(query, analysis)
+        except Exception as exc:
+            last_exc = exc
+            remaining = max_retries - 1 - attempt
+            if remaining <= 0:
+                logger.error("%s exhausted all %d retries: %s", persona, max_retries, exc)
+                raise
+            wait = base_delay * (2 ** attempt)  # 1s, 2s, 4s
+            logger.warning(
+                "%s attempt %d/%d failed (%s: %s), retrying in %.1fs ...",
+                persona, attempt + 1, max_retries, type(exc).__name__, exc, wait,
+            )
+            await asyncio.sleep(wait)
+
+    # Unreachable — kept for type checker
+    raise last_exc  # type: ignore[misc]
+
+
 async def _debate_critic(state: GraphState) -> Dict[str, Any]:
-    """Run 3 critic personas in parallel, then moderate the results."""
+    """Run 3 critic personas in parallel with node-level retry, then moderate."""
     from app.agents.debate_critics import OptimistCritic, SkepticCritic, RealistCritic
     from app.agents.moderator_agent import ModeratorAgent
 
@@ -120,18 +160,18 @@ async def _debate_critic(state: GraphState) -> Dict[str, Any]:
     analysis = state.get("analyzer_output", {}).get("analysis", "")
     current_count = state.get("correction_count", 0)
 
-    logger.info("Debate mode: launching 3 parallel critics...")
+    logger.info("Debate mode: launching 3 parallel critics (each with up to 3 retries)...")
 
     optimist = OptimistCritic()
     skeptic = SkepticCritic()
     realist = RealistCritic()
     moderator = ModeratorAgent()
 
-    # Fan-out: all 3 critics run in parallel
+    # Fan-out: all 3 critics run in parallel, each independently retries
     critiques = await asyncio.gather(
-        optimist.critique(query, analysis),
-        skeptic.critique(query, analysis),
-        realist.critique(query, analysis),
+        _retry_critic(optimist, query, analysis),
+        _retry_critic(skeptic,  query, analysis),
+        _retry_critic(realist,  query, analysis),
     )
 
     # Fan-in: moderator synthesizes

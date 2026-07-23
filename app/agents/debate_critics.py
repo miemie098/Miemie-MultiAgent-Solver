@@ -27,7 +27,13 @@ class BaseCriticPersona:
         self.llm = LLMFactory.get_llm(temperature=0.0)
 
     async def critique(self, query: str, analysis: str) -> Dict:
-        """Evaluate the analysis and return a structured verdict."""
+        """Evaluate the analysis and return a structured verdict.
+
+        Raises on transient failure (network, timeout, rate-limit) so that
+        the caller can implement node-level retry without data loss.
+        JSON parse failures are still returned as a structured error verdict
+        since they indicate a content-quality issue, not a transient one.
+        """
         persona_name = self.__class__.__name__
         logger.info("%s starting review...", persona_name)
 
@@ -41,17 +47,8 @@ class BaseCriticPersona:
 请严格按照 JSON 格式输出（不要包含任何 Markdown 或额外文字）：
 {{"passed": true或false, "confidence": 0.0到1.0之间的数值, "key_concerns": ["问题1", "问题2"], "suggested_fix": "你的修正建议"}}"""
 
-        try:
-            res = await self.llm.ainvoke([HumanMessage(content=prompt)])
-            return self._parse_response(res.content)
-        except Exception as exc:
-            logger.error("%s failed: %s", persona_name, exc)
-            return {
-                "passed": False,
-                "confidence": 0.0,
-                "key_concerns": [f"Critic evaluation error: {str(exc)}"],
-                "suggested_fix": "请重新分析。",
-            }
+        res = await self.llm.ainvoke([HumanMessage(content=prompt)])
+        return self._parse_response(res.content)
 
     def _parse_response(self, content: str) -> Dict:
         """Defensively parse JSON from LLM output."""
