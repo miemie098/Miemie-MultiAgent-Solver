@@ -111,23 +111,32 @@ def create_workflow():
 # ---------------------------------------------------------------------------
 # Debate mode internals
 # ---------------------------------------------------------------------------
+def _degraded_verdict(persona: str, exc: Exception) -> Dict:
+    """Return a neutral "service unavailable" verdict for a failed critic.
+
+    This is NOT a vote against the analysis — it's an explicit abstention.
+    The Moderator knows to discount degraded votes from its quorum count.
+    """
+    return {
+        "passed": False,
+        "confidence": 0.0,
+        "key_concerns": [f"[{persona}] 服务暂不可用 ({type(exc).__name__})，该审查员弃权"],
+        "suggested_fix": "",
+        "degraded": True,  # signal to Moderator: this is a fault, not a real vote
+    }
+
+
 async def _retry_critic(critic, query: str, analysis: str,
-                         max_retries: int = 3, base_delay: float = 1.0):
+                         max_retries: int = 3, base_delay: float = 1.0) -> Dict:
     """Node-level retry for a single critic with exponential backoff.
 
-    Only retries on transient failures (network, timeout, rate-limit).
-    Search and Analyze results are untouched — this is pure re-entrant,
-    so retrying a failed critic loses zero prior computation.
+    On transient failure, retries with 1s→2s→4s backoff.
+    On final exhaustion, returns a degraded abstention verdict — does NOT
+    throw, so asyncio.gather always converges and the Moderator always runs.
 
-    Args:
-        critic: A BaseCriticPersona instance.
-        query: The original user query (from state, unchanged).
-        analysis: The Analyzer output (from state, unchanged).
-        max_retries: Total attempts (including the first call).
-        base_delay: Initial backoff in seconds (doubles each retry).
+    Search and Analyze results are untouched throughout.
     """
     persona = critic.__class__.__name__
-    last_exc = None
 
     for attempt in range(max_retries):
         try:
@@ -135,24 +144,22 @@ async def _retry_critic(critic, query: str, analysis: str,
                 logger.info("%s retry %d/%d ...", persona, attempt, max_retries - 1)
             return await critic.critique(query, analysis)
         except Exception as exc:
-            last_exc = exc
             remaining = max_retries - 1 - attempt
             if remaining <= 0:
-                logger.error("%s exhausted all %d retries: %s", persona, max_retries, exc)
-                raise
+                logger.error(
+                    "%s exhausted all %d retries — returning degraded verdict", persona, max_retries
+                )
+                return _degraded_verdict(persona, exc)
             wait = base_delay * (2 ** attempt)  # 1s, 2s, 4s
             logger.warning(
-                "%s attempt %d/%d failed (%s: %s), retrying in %.1fs ...",
-                persona, attempt + 1, max_retries, type(exc).__name__, exc, wait,
+                "%s attempt %d/%d failed (%s), retrying in %.1fs ...",
+                persona, attempt + 1, max_retries, exc, wait,
             )
             await asyncio.sleep(wait)
 
-    # Unreachable — kept for type checker
-    raise last_exc  # type: ignore[misc]
-
 
 async def _debate_critic(state: GraphState) -> Dict[str, Any]:
-    """Run 3 critic personas in parallel with node-level retry, then moderate."""
+    """Run 3 critic personas in parallel with node-level retry + graceful degradation."""
     from app.agents.debate_critics import OptimistCritic, SkepticCritic, RealistCritic
     from app.agents.moderator_agent import ModeratorAgent
 
@@ -167,14 +174,31 @@ async def _debate_critic(state: GraphState) -> Dict[str, Any]:
     realist = RealistCritic()
     moderator = ModeratorAgent()
 
-    # Fan-out: all 3 critics run in parallel, each independently retries
+    # Fan-out: all 3 critics run in parallel, each independently retries.
+    # _retry_critic never throws — degraded critics return abstention verdicts.
     critiques = await asyncio.gather(
         _retry_critic(optimist, query, analysis),
         _retry_critic(skeptic,  query, analysis),
         _retry_critic(realist,  query, analysis),
     )
 
-    # Fan-in: moderator synthesizes
+    degraded_count = sum(1 for c in critiques if c.get("degraded"))
+    healthy_count = 3 - degraded_count
+
+    if degraded_count == 3:
+        # Complete outage — escalate, no meaningful vote possible
+        logger.error("All 3 critics degraded — DeepSeek service unreachable")
+        raise RuntimeError(
+            "辩论模式无法继续：3 个审查节点全部不可用。"
+            "请检查 DeepSeek API 服务状态或网络连接后重试。"
+        )
+    elif degraded_count > 0:
+        logger.warning(
+            "%d/%d critics degraded — running Moderator with %d healthy votes",
+            degraded_count, 3, healthy_count,
+        )
+
+    # Fan-in: moderator synthesizes (handles degraded votes gracefully)
     result = await moderator.synthesize(query, analysis, critiques)
 
     passed = result["consensus"]

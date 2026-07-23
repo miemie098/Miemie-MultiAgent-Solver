@@ -12,10 +12,10 @@ from app.agents.config import LLMFactory
 
 logger = logging.getLogger("miemie.moderator")
 
-# Consensus threshold: need at least this many critics to pass
-PASS_THRESHOLD = 2  # out of 3
+# Consensus threshold: need at least this fraction of HEALTHY critics to pass
+PASS_RATIO = 2 / 3  # ≥ 2 out of 3 healthy critics must approve
 
-# Average confidence must exceed this for a pass
+# Average confidence must exceed this for a pass (degraded votes excluded)
 MIN_AVG_CONFIDENCE = 0.6
 
 
@@ -23,10 +23,14 @@ class ModeratorAgent:
     """Synthesizes multiple critic verdicts into a single go/no-go decision.
 
     Algorithm:
-      1. Count pass votes.
-      2. Compute average confidence.
-      3. If votes >= PASS_THRESHOLD and avg_confidence >= MIN_AVG_CONFIDENCE → pass.
-      4. Otherwise → fail, and produce unified improvement feedback via LLM.
+      1. Separate healthy critics from degraded (abstention) verdicts.
+      2. Count pass votes among healthy critics only.
+      3. Compute average confidence from healthy critics only.
+      4. If healthy >= 2 and pass_ratio >= 2/3 and avg_confidence >= 0.6 → pass.
+      5. Otherwise → fail, and produce unified improvement feedback via LLM.
+
+    Degraded critics (e.g. DeepSeek API unreachable after 3 retries) are
+    explicitly excluded from the quorum to prevent false negatives.
     """
 
     def __init__(self):
@@ -40,47 +44,66 @@ class ModeratorAgent:
             query: The original user question.
             analysis: The Analyzer's output being reviewed.
             critiques: List of dicts from each critic persona.
+                       May contain 'degraded': True entries (abstentions).
 
         Returns:
             {"consensus": bool, "feedback": str, "confidence": float, "details": ...}
         """
-        votes_passed = sum(1 for c in critiques if c.get("passed", False))
-        avg_confidence = (
-            sum(c.get("confidence", 0.5) for c in critiques) / len(critiques)
-            if critiques
-            else 0.0
-        )
+        healthy = [c for c in critiques if not c.get("degraded")]
+        degraded = [c for c in critiques if c.get("degraded")]
 
-        logger.info(
-            "Moderator: %d/%d passed, avg_confidence=%.2f",
-            votes_passed, len(critiques), avg_confidence,
-        )
-
-        if votes_passed >= PASS_THRESHOLD and avg_confidence >= MIN_AVG_CONFIDENCE:
-            logger.info("Moderator: CONSENSUS — analysis approved")
+        if not healthy:
+            # All degraded — caller should have escalated before reaching here
+            logger.error("Moderator: 0 healthy critics — cannot form quorum")
             return {
-                "consensus": True,
-                "feedback": self._build_pass_feedback(critiques),
-                "confidence": avg_confidence,
+                "consensus": False,
+                "feedback": "所有审查节点不可用，无法形成有效决议。请检查 API 服务后重试。",
+                "confidence": 0.0,
                 "details": {
-                    "votes_passed": votes_passed,
+                    "votes_passed": 0,
                     "total_critics": len(critiques),
-                    "avg_confidence": avg_confidence,
+                    "healthy": 0,
+                    "degraded": len(degraded),
+                    "avg_confidence": 0.0,
                 },
             }
 
-        logger.info("Moderator: REJECTED — synthesizing unified feedback")
-        unified_feedback = await self._synthesize_feedback(
-            query, analysis, critiques
+        passed_count = sum(1 for c in healthy if c.get("passed", False))
+        avg_confidence = (
+            sum(c.get("confidence", 0.5) for c in healthy) / len(healthy)
         )
 
+        # Dynamic threshold: need ≥ ceil(healthy * PASS_RATIO) pass votes
+        required = max(2, int(len(healthy) * PASS_RATIO + 0.5))
+
+        logger.info(
+            "Moderator: %d/%d healthy passed (need %d), avg_confidence=%.2f, degraded=%d",
+            passed_count, len(healthy), required, avg_confidence, len(degraded),
+        )
+
+        passed = passed_count >= required and avg_confidence >= MIN_AVG_CONFIDENCE
+
+        if passed:
+            logger.info("Moderator: CONSENSUS — analysis approved")
+            feedback = self._build_pass_feedback(healthy)
+            if degraded:
+                feedback += f"（注意：{len(degraded)} 个审查节点因服务不可用弃权）"
+        else:
+            logger.info("Moderator: REJECTED — synthesizing unified feedback")
+            feedback = await self._synthesize_feedback(query, analysis, healthy)
+            if degraded:
+                feedback += f"\n\n[系统提示] {len(degraded)} 个审查节点因服务不可用弃权，本决议仅基于 {len(healthy)} 个有效投票。"
+
         return {
-            "consensus": False,
-            "feedback": unified_feedback,
+            "consensus": passed,
+            "feedback": feedback,
             "confidence": avg_confidence,
             "details": {
-                "votes_passed": votes_passed,
+                "votes_passed": passed_count,
                 "total_critics": len(critiques),
+                "healthy": len(healthy),
+                "degraded": len(degraded),
+                "required_votes": required,
                 "avg_confidence": avg_confidence,
             },
         }
