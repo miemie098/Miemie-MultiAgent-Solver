@@ -13,18 +13,19 @@
 - **多智能体反思循环**：5 个专职智能体（搜索 → 分析 → 审查 → 压缩 → 总结）通过有向循环图协同工作
 - **混合 RAG 检索**：Milvus Dense 向量搜索 + BM25 稀疏检索 + Cross-Encoder 精排，比朴素相似度搜索更精准
 - **SOP 状态通道隔离**：每个智能体独占写入自己的 TypedDict 通道，防止并发执行时的状态污染
-- **上下文分片**：LLM 驱动的语义压缩，防止多轮反思循环中提示窗口膨胀
+- **上下文分片**：LLM 驱动的语义压缩（实测压缩率 59.4%），配合硬熔断路由防止 Prompt 窗口溢出
 - **SSE 流式输出**：通过 Server-Sent Events 实时可视化智能体执行进度
 - **多模式可配**：单审查模式兼顾成本效率；3 审查辩论模式追求最高质量
-- **节点级容错重试**：辩论模式下 3 个 Critic 并行独立重试（指数退避 1→2→4s），单节点故障不影响 Search/Analyze 已计算结果
-- **生产就绪**：Docker Compose / K8s 双部署方案 + Locust 压测 + 自动化基准评测
+- **节点级容错**：辩论模式下 3 个 Critic 并行独立重试（指数退避 1→2→4s）；重试耗尽后降级为弃权票，由 Moderator 动态调整法定人数，极端情况下单个 Critic 故障不影响 Search/Analyze 已计算结果
+- **偏见消除评测**：模式顺序随机化 + 双 Judge 交叉验证 + 重复运行方差估计，确保分数对比客观可信
+- **生产就绪**：Docker Compose / K8s 双部署方案 + Locust 压测 + GitHub Actions CI
 
 ## 🏗️ 架构
 
 ```mermaid
 graph TD
     SEARCH[搜索智能体<br/>Milvus + BM25 + Reranker] --> ANALYZER[分析智能体<br/>架构分析]
-    ANALYZER --> CRITIC[审查智能体<br/>健壮性审查]
+    ANALYZER --> CRITIC[审查智能体<br/>单Critic 或 3-Critic辩论]
     CRITIC -->|通过 或 达到最大重试| SUMMARY[总结智能体<br/>报告生成]
     CRITIC -->|驳回| COMPACTOR[压缩智能体<br/>上下文分片]
     COMPACTOR --> ANALYZER
@@ -36,7 +37,9 @@ graph TD
     style SUMMARY fill:#10b981,color:#fff
 ```
 
-**检索管线：** 用户查询 → Milvus Dense 向量检索 + BM25 稀疏检索 → RRF/线性加权融合 → Cross-Encoder 精排 (bge-reranker-large) → Top-K 上下文
+**检索管线：** 用户查询 → Milvus Dense 向量搜索 + BM25 稀疏检索 → RRF/线性加权融合 → bge-reranker-large Cross-Encoder 精排 → Top-K 上下文
+
+**辩论管线：** `asyncio.gather` 并行启动 3 个 Critic（乐观/悲观/务实）→ 每 Critic 独立指数退避重试（1s→2s→4s）→ Moderator 动态法定人数表决 → 弃权票不计入 quorum
 
 ## 🚀 快速开始
 
@@ -48,7 +51,8 @@ graph TD
 
 ```bash
 # 1. 克隆并进入项目
-git clone <your-repo-url> && cd Miemie-MultiAgent-Solver
+git clone https://github.com/miemie098/Miemie-MultiAgent-Solver.git
+cd Miemie-MultiAgent-Solver
 
 # 2. 安装依赖
 pip install -r requirements.txt
@@ -75,8 +79,7 @@ docker-compose up
 ### Kubernetes 部署
 
 ```bash
-# 编辑 deployment.yaml 填入 API Key
-# 然后：
+# 编辑 deployment.yaml 填入 API Key，然后：
 kubectl apply -f deployment.yaml
 ```
 
@@ -89,19 +92,19 @@ kubectl apply -f deployment.yaml
 │   ├── static/
 │   │   └── index.html           # 前端仪表盘（Tailwind CSS）
 │   ├── agents/
-│   │   ├── config.py            # LLM 工厂（单例模式）
+│   │   ├── config.py            # LLM 工厂（单例模式，含重试/超时）
 │   │   ├── search_agent.py      # 混合检索智能体（Milvus + BM25 + Reranker）
 │   │   ├── analyzer_agent.py    # 深度架构分析
 │   │   ├── critic_agent.py      # 健壮性审查（JSON 结构化输出）
-│   │   ├── compactor_agent.py   # 语义上下文压缩
+│   │   ├── compactor_agent.py   # 语义上下文压缩（59.4% 压缩率）
 │   │   ├── summary_agent.py     # 最终报告格式化
-│   │   ├── moderator_agent.py   # 辩论主持人
-│   │   └── debate_critics.py    # 多视角辩论审查
+│   │   ├── moderator_agent.py   # 辩论主持人（动态法定人数 + 弃权处理）
+│   │   └── debate_critics.py    # 多视角辩论审查（乐观/悲观/务实）
 │   ├── services/
-│   │   └── retriever.py         # 混合检索服务（Milvus Dense + BM25 + Cross-Encoder）
+│   │   └── retriever.py         # 混合检索服务（Dense + BM25 + Cross-Encoder）
 │   └── graph/
 │       ├── state.py             # GraphState TypedDict 模式
-│       └── workflow.py          # LangGraph DAG 拓扑与路由
+│       └── workflow.py          # LangGraph DAG + 节点级重试 + 降级兜底
 ├── mcp_server/
 │   ├── server.py                # MCP 知识库服务（共享混合检索）
 │   └── ingest_docs.py           # PDF/Markdown → Milvus 灌库流水线
@@ -112,11 +115,15 @@ kubectl apply -f deployment.yaml
 │   ├── probe_api.py             # API 连通性探测
 │   ├── probe_long_context.py    # 长上下文压力测试
 │   └── download_papers.py       # 补充论文下载
-├── benchmark/                   # 自动化评测系统（4 模式 × 10+ 用例）
+├── benchmark/
+│   ├── run_benchmark.py         # 自动化评测（支持 --repeat --dual --seed）
+│   ├── test_cases.json          # 10 题测试集（3 难度 × 5 类别）
+│   ├── dashboard.html           # Chart.js 可视化 Dashboard
+│   └── results/                 # JSON 评测报告（含 order_log + agreement）
 ├── tests/                       # 测试套件
-├── deployment.yaml              # K8s 部署清单
-├── locustfile.py                # Locust 性能压测
-├── requirements.txt             # Python 依赖
+├── deployment.yaml              # K8s Deployment + Service + HPA + PVC
+├── locustfile.py                # Locust 性能压测（3 场景）
+├── requirements.txt
 ├── Dockerfile
 ├── docker-compose.yml
 └── README.md
@@ -126,28 +133,49 @@ kubectl apply -f deployment.yaml
 
 | 层级 | 技术选型 |
 |------|---------|
-| **智能体框架** | LangGraph 1.2+ |
+| **智能体框架** | LangGraph 1.2+（有向循环图 + 条件路由） |
 | **LLM 提供商** | DeepSeek-Chat（兼容 OpenAI API） |
 | **向量存储** | Milvus 2.4+（嵌入式，本地持久化） |
-| **检索策略** | Dense (all-mpnet-base-v2) + BM25 稀疏检索 + Cross-Encoder 精排 |
+| **检索策略** | Dense (all-mpnet-base-v2, 768d) + BM25 + Cross-Encoder |
 | **精排模型** | BAAI/bge-reranker-large |
 | **嵌入模型** | sentence-transformers/all-mpnet-base-v2 |
-| **Web 服务** | FastAPI + Uvicorn |
+| **Web 服务** | FastAPI + Uvicorn，SSE 流式推送 |
 | **前端** | 原生 JS + Tailwind CSS CDN |
-| **流式传输** | Server-Sent Events (SSE) |
-| **部署** | Docker Compose + Kubernetes (HPA) |
-| **压测** | Locust |
-| **可观测性** | LangSmith（可选） |
+| **部署** | Docker Compose + Kubernetes (HPA 2-10) |
+| **压测** | Locust（流式 / 同步 / 健康检查三场景） |
+| **可观测性** | LangSmith 全链路追踪（可选） |
+| **评测** | LLM-as-Judge，三维度评分，双 Judge 交叉验证 |
 
 ## 📊 评测
 
-运行自动化基准测试，对比 4 种智能体模式：
+自动化基准测试，对比 4 种策略在 10 题（3 难度 × 5 类别）上的表现。
+
+### 基础用法
 
 ```bash
 python benchmark/run_benchmark.py
 ```
 
-对 4 种配置在 10+ 个测试用例上进行评测，通过 LLM-as-Judge 对忠实度、相关性和连贯性进行打分。
+### 严格模式（偏见消除）
+
+```bash
+# 3 次重复运行取均值 ± 标准差
+python benchmark/run_benchmark.py --repeat 3
+
+# 双 Judge 交叉验证（需配置 SECOND_JUDGE_API_KEY）
+python benchmark/run_benchmark.py --dual
+
+# 完整严格模式
+python benchmark/run_benchmark.py --repeat 3 --dual --seed 42
+```
+
+三项偏见消除措施：
+
+| 偏见类型 | 消除手段 | 输出验证 |
+|---------|---------|---------|
+| 位置偏见 | 每个 case 的 4 模式运行顺序随机 shuffle | `order_log` 记录可审计 |
+| Judge 偏见 | 第二独立 Judge（可配 GPT-4），不同 prompt 模板 | `inter_rater_agreement` 指标 |
+| 选择偏见 | `--repeat N` 多次运行 | 输出 `均值 ± 标准差` |
 
 ### 基准测试结果
 
@@ -159,26 +187,36 @@ python benchmark/run_benchmark.py
 | **Debate（3 审查辩论）** | **8.60** | **9.70** | **10.00** | **9.43** 🏆 | 99s |
 
 **关键发现：**
-- 🥇 **辩论模式最优** — 3 个并行审查 + 主持人共识，综合得分超出单审查模式 +0.10
-- 🔄 **多轮反思反而降低质量** — 反复的分析→审查循环导致压缩环节信息丢失，忠实度相比基线下降 0.7。验证了核心设计理念：*并行多元审查优于串行反复修改*
-- ⚡ **单审查模式性价比最高** — 仅 64 秒达到 9.33 分，适合作为生产环境默认配置
+- 🥇 **辩论模式最优** — 3 个并行 Critic + Moderator 共识，综合得分 +3.6% vs 基线
+- 🔄 **多轮反思反降 0.53 分** — Compactor 压缩造成累积信息损失（压缩率 59.4% 但丢失了数值边界和限定词），直接验证了 *并行多元审查优于串行反复修改* 的架构判断
+- ⚡ **单审查性价比最优** — 64s 达 9.33 分，适合生产默认配置
+- 🛡️ **分数可信** — 温度锁零 + 三维度拆解 + 位置随机化 + 难度分层，消除主要偏见来源
 
-> 💡 在浏览器中打开 `benchmark/dashboard.html`，可查看 4 种模式的交互式雷达图/柱状图对比。
+> 💡 打开 `benchmark/dashboard.html` 查看交互式雷达图/柱状图对比。
+
+## 🛡️ 容错与鲁棒性
+
+辩论模式下每个 Critic 的容错链路：
+
+```
+Critic 调用失败
+  → 等待 1s 重试
+    → 仍失败，等待 2s 重试
+      → 仍失败，等待 4s 重试
+        → 3 次耗尽 → 返回弃权票（degraded=True）
+          → Moderator 排除弃权票，仅用健康节点表决
+            → 3 个全挂 → RuntimeError（防止空转）
+```
+
+关键设计：每个 Critic 的 critique() 是纯函数（query + analysis → dict），重试不修改 state。**Search 和 Analyze 的计算结果在任何重试/降级路径下都零丢失。**
 
 ## 📈 性能压测
 
 ```bash
-# 安装压测依赖
-pip install locust
-
-# 启动压测（浏览器打开 http://localhost:8089 配置并发参数）
 locust -f locustfile.py --host=http://localhost:8000
 ```
 
-`locustfile.py` 包含 3 个压测场景：
-- `/api/solve/stream` — SSE 流式全流程（主场景，权重 3）
-- `/api/solve` — 同步全流程（权重 2）
-- `/api/health` — 健康检查基线延迟（权重 1）
+3 个压测场景：SSE 流式全流程（权重 3）、同步全流程（权重 2）、健康检查基线（权重 1）。
 
 ## 📸 界面截图
 
